@@ -1,0 +1,42 @@
+
+<div class="wrap">
+
+<!-- ============ INTRO ============ -->
+<section class="screen on" id="intro">
+  <p class="eyebrow">EEN SPEL VAN BOB &middot; VOOR VALERIE</p>
+  <h1>Valerie end game</h1>
+  <p class="lede">You win some, you lose some. That's life.</p>
+  <p><button class="btn" id="startBtn">Start</button></p>
+</section>
+
+<!-- ============ SPEL ============ -->
+<section class="screen" id="play">
+  <div class="hud">
+    <div class="barbox">
+      <div class="barlabel"><span>LIFE</span><b id="pct">100%</b></div>
+      <div class="bar"><div class="barfill" id="bar" style="width:100%"></div></div>
+    </div>
+  </div>
+
+  <div class="arena" id="arena">
+    <svg class="hills" viewBox="0 0 320 80" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 42 L46 26 L88 40 L130 20 L178 36 L224 18 L270 34 L320 24 L320 80 L0 80 Z" fill="#3a1c32"/>
+      <path d="M0 58 L54 46 L100 56 L154 42 L206 54 L256 44 L304 54 L320 48 L320 80 L0 80 Z" fill="#48213e"/>
+      <rect x="0" y="72" width="320" height="8" fill="#552849"/>
+    </svg>
+    <div class="fighter" id="bob"></div>
+    <div class="fighter flip" id="val"></div>
+
+    <div class="overlay" id="overlay">
+      <p class="gover">GAME OVER</p>
+      <div class="retrywrap" id="retrywrap">
+        <button class="retry" id="retry">Opnieuw proberen</button>
+      </div>
+      <p class="rquip" id="rquip"></p>
+    </div>
+  </div>
+
+  <p class="hint" id="hint">BEWEEG MET JE MUIS OF JE DUIM</p>
+</section>
+
+</div>

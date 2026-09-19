@@ -1,0 +1,346 @@
+
+<script>
+/*__SPRITES__*/
+
+/* ============================================================
+   RAKET
+   ============================================================ */
+const PAL_ROCK2 = { R:'#6b7566', F:'#ffcf5e', f:'#ff8a3c', OUT:'#1a1f18' };
+const ROCKET = ['...RRRR..','..RRRRRRf','RRRRRRRRF','..RRRRRRf','...RRRR..'];
+
+function propSvg(map, pal){
+  const w = map[0].length, h = map.length;
+  return '<svg viewBox="0 0 ' + (w+2) + ' ' + (h+2) + '" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg">'
+       + buildPart(map, pal, true, 1, 1) + '</svg>';
+}
+
+/* ============================================================
+   OPBOUW
+   ============================================================ */
+const $ = s => document.querySelector(s);
+const arena = $('#arena'), bob = $('#bob'), val = $('#val');
+const barEl = $('#bar'), pctEl = $('#pct');
+const overlay = $('#overlay'), retry = $('#retry'), rquip = $('#rquip'), retrywrap = $('#retrywrap');
+
+function paint(){
+  bob.innerHTML = renderChar(HIM, {}).replace('class="sprite"', 'class="sprite st-idle"');
+  val.innerHTML = renderChar(HER, { bazooka:true }).replace('class="sprite"', 'class="sprite st-idle"');
+}
+paint();
+
+for (let i = 0; i < 22; i++){
+  const s = document.createElement('span');
+  s.className = 'star';
+  s.style.left = (Math.random()*98) + '%';
+  s.style.top  = (Math.random()*45) + '%';
+  arena.appendChild(s);
+}
+
+const bobSvg = () => bob.querySelector('svg');
+const valSvg = () => val.querySelector('svg');
+function setPose(el, pose){
+  const svg = el.querySelector('svg');
+  svg.className.baseVal = 'sprite st-' + pose;
+}
+
+/* punt binnen een sprite (viewBox-coordinaten) omrekenen naar arena-pixels */
+function spotOf(el, vx, vy, flipped){
+  const a = arena.getBoundingClientRect(), b = el.getBoundingClientRect();
+  const fx = flipped ? (53 - vx) : vx;
+  return { x: b.left - a.left + (fx/53)*b.width, y: b.top - a.top + (vy/52)*b.height };
+}
+
+/* ============================================================
+   TEKSTEN
+   ============================================================ */
+const LINES = [
+  'Hoi',
+  'Lief',
+  'Niet persoonlijk bedoeld'
+];
+const HITS = [7, 6, 8, 5, 7, 6, 8, 6];
+const RQUIPS = ['hij wil niet.', 'ook dat nog.', 'net als ik.'];
+
+/* ============================================================
+   STAAT
+   ============================================================ */
+const S = {
+  running:false, hp:100, shot:0, dodgeTries:0,
+  bobT:0.22, bobX:0.22, bobTY:0.35, bobY:0.35,
+  valX:0.74, valDir:1, valY:0.4, valPhase:0,
+  last:0, nextShot:0, phase:'idle', raf:0
+};
+
+function reset(){
+  S.running = false; S.hp = 100; S.shot = 0; S.dodgeTries = 0;
+  S.bobT = 0.22; S.bobX = 0.22; S.bobTY = 0.35; S.bobY = 0.35;
+  S.valX = 0.74; S.valY = 0.4; S.valPhase = 0; S.phase = 'idle';
+  bob.classList.remove('ko','hurt'); bob.style.rotate = '0deg';
+  bob.innerHTML = renderChar(HIM, {}).replace('class="sprite"', 'class="sprite st-idle"');
+  bob._pose = 'idle';
+  val.classList.remove('charging','firing');
+  setPose(bob, 'idle'); setPose(val, 'idle');
+  overlay.classList.remove('on');
+  retry.textContent = 'Opnieuw proberen'; retry.classList.remove('caught');
+  retry.style.left = ''; retry.style.top = '';
+  rquip.textContent = '';
+  setHp(100);
+  [...arena.querySelectorAll('.beam,.dmg,.bubble,.boom,.rocket,.warn')].forEach(e => e.remove());
+}
+
+function setHp(v){
+  S.hp = Math.max(0, v);
+  barEl.style.width = S.hp + '%';
+  pctEl.textContent = Math.round(S.hp) + '%';
+  barEl.style.background = S.hp > 66 ? 'var(--hp-ok)' : S.hp > 33 ? 'var(--hp-mid)' : 'var(--hp-low)';
+}
+
+/* ============================================================
+   BESTURING
+   ============================================================ */
+function aim(clientX, clientY){
+  const a = arena.getBoundingClientRect();
+  S.bobT  = Math.min(0.40, Math.max(0.10, (clientX - a.left) / a.width));
+  S.bobTY = Math.min(1, Math.max(0, 1 - (clientY - a.top) / a.height));
+}
+arena.addEventListener('pointermove', e => { if (S.running) aim(e.clientX, e.clientY); });
+arena.addEventListener('pointerdown', e => { if (S.running){ e.preventDefault(); aim(e.clientX, e.clientY); } });
+addEventListener('keydown', e => {
+  if (!S.running) return;
+  if (e.key === 'ArrowLeft'  || e.key === 'a') { S.bobT  = Math.max(0.10, S.bobT - 0.07); e.preventDefault(); }
+  if (e.key === 'ArrowRight' || e.key === 'd') { S.bobT  = Math.min(0.40, S.bobT + 0.07); e.preventDefault(); }
+  if (e.key === 'ArrowUp'    || e.key === 'w') { S.bobTY = Math.min(1, S.bobTY + 0.12); e.preventDefault(); }
+  if (e.key === 'ArrowDown'  || e.key === 's') { S.bobTY = Math.max(0, S.bobTY - 0.12); e.preventDefault(); }
+});
+
+/* ============================================================
+   LUS
+   ============================================================ */
+/* fy 0 = vooraan onderin, 1 = achteraan bovenin. Hoger staan = iets kleiner. */
+const DEPTH = 0.30;
+function place(el, fx, fy){
+  const a = arena.getBoundingClientRect();
+  const sc = 1 - 0.20 * fy;
+  el.style.scale = sc;
+  const w = el.getBoundingClientRect().width;
+  const lift = fy * a.height * DEPTH;
+  el.style.translate = (fx * a.width - w/2) + 'px ' + (-lift) + 'px';
+}
+
+function loop(now){
+  S.raf = requestAnimationFrame(loop);
+  const dt = Math.min(64, now - (S.last || now)); S.last = now;
+
+  if (S.phase !== 'down'){
+    const px = S.bobX, py = S.bobY;
+    S.bobX += (S.bobT  - S.bobX) * Math.min(1, dt/130);
+    S.bobY += (S.bobTY - S.bobY) * Math.min(1, dt/150);
+    const moving = Math.abs(S.bobX - px) > 0.0012 || Math.abs(S.bobY - py) > 0.0016;
+    const want = moving ? 'walk' : 'idle';
+    if (bob._pose !== want && !bob.classList.contains('ko')){ setPose(bob, want); bob._pose = want; }
+    place(bob, S.bobX, S.bobY);
+  }
+
+  if (S.phase === 'laser'){
+    S.valX += S.valDir * dt * 0.000075;
+    if (S.valX > 0.84){ S.valX = 0.84; S.valDir = -1; }
+    if (S.valX < 0.64){ S.valX = 0.64; S.valDir = 1; }
+    S.valPhase += dt * 0.00055;
+    S.valY = 0.4 + Math.sin(S.valPhase) * 0.34;
+    if (val._pose !== 'walk'){ setPose(val, 'walk'); val._pose = 'walk'; }
+  }
+  place(val, S.valX, S.valY);
+
+  if (S.phase === 'laser' && now >= S.nextShot) shoot();
+}
+
+/* ============================================================
+   LASER
+   ============================================================ */
+/* houd zwevende tekst binnen de arena */
+function clampX(x, halfW){
+  const a = arena.getBoundingClientRect();
+  return Math.min(a.width - halfW - 4, Math.max(halfW + 4, x));
+}
+
+function fx(cls, css){
+  const d = document.createElement('div');
+  d.className = cls; d.style.cssText = css;
+  arena.appendChild(d);
+  return d;
+}
+
+function say(text){
+  [...arena.querySelectorAll('.bubble')].forEach(e => e.remove());
+  const a = arena.getBoundingClientRect();
+  const p = spotOf(val, 24, 4, true);
+  const half = Math.min(150, a.width * 0.34);
+  const x = Math.min(a.width - half - 6, Math.max(half + 6, p.x));
+  const b = fx('bubble', 'left:' + x + 'px;top:' + Math.max(30, p.y) + 'px;max-width:' + (half*2) + 'px;');
+  b.textContent = text;
+  setTimeout(() => b.remove(), 2000);
+}
+
+function shoot(){
+  const i = S.shot++;
+  S.nextShot = performance.now() + 1050;
+
+  val.classList.add('charging');
+  setPose(val, 'idle'); val._pose = 'idle';
+  if (i % 2 === 0 && i / 2 < LINES.length) say(LINES[i / 2]);
+
+  setTimeout(() => {
+    if (S.phase !== 'laser') return;
+    val.classList.remove('charging'); val.classList.add('firing');
+
+    const from = spotOf(val, 24.5, 14.5, true);
+    const to   = spotOf(bob, 24.5, 26, false);
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const len = Math.hypot(dx, dy), ang = Math.atan2(dy, dx) * 180 / Math.PI;
+    const beam = fx('beam', 'left:' + from.x + 'px;top:' + from.y + 'px;width:' + len +
+                    'px;transform:rotate(' + ang + 'deg);');
+    setTimeout(() => beam.remove(), 200);
+
+    const near = (i === 2 || i === 5);
+    setTimeout(() => {
+      val.classList.remove('firing');
+      if (S.phase !== 'laser') return;
+
+      const h = HITS[i % HITS.length];
+      bob.classList.add('hurt');
+      setTimeout(() => bob.classList.remove('hurt'), 460);
+      setTimeout(() => {
+        const d = fx('dmg', 'left:' + clampX(to.x, 44) + 'px;top:' + (to.y - 4) + 'px;');
+        d.textContent = '-' + h + ' ego';
+        setTimeout(() => d.remove(), 1100);
+      }, 0);
+      setHp(S.hp - h);
+
+      if (S.hp <= 50) bazooka();
+    }, 150);
+  }, 380);
+}
+
+/* ============================================================
+   BAZOOKA
+   ============================================================ */
+function bazooka(){
+  S.phase = 'bazooka';
+  val.classList.remove('charging','firing');
+
+  const w = fx('warn', '');
+  w.textContent = 'ZE PAKT IETS GROTERS';
+
+  setTimeout(() => {
+    setPose(val, 'bazooka'); val._pose = 'bazooka';
+    say('tot ziens');
+  }, 950);
+
+  setTimeout(() => {
+    w.remove();
+    const from = spotOf(val, 46, 27, true);
+    const to   = spotOf(bob, 24.5, 26, false);
+    const r = fx('rocket', 'left:' + from.x + 'px;top:' + from.y + 'px;height:26px;translate:-50% -50%;');
+    r.innerHTML = propSvg(ROCKET, PAL_ROCK2);
+    requestAnimationFrame(() => {
+      r.style.transition = 'translate .5s cubic-bezier(.4,0,.9,.6)';
+      r.style.translate = (to.x - from.x - 12) + 'px ' + (to.y - from.y) + 'px';
+    });
+
+    setTimeout(() => { r.remove(); impact(to); }, 520);
+  }, 2100);
+}
+
+function impact(to){
+  S.phase = 'down';
+  [...arena.querySelectorAll('.bubble')].forEach(e => e.remove());
+  const b = fx('boom', 'left:' + to.x + 'px;top:' + to.y + 'px;width:200px;height:200px;');
+  setTimeout(() => b.remove(), 600);
+  arena.classList.add('shake');
+  setTimeout(() => arena.classList.remove('shake'), 450);
+
+  setHp(0);
+  bob.innerHTML = renderChar(HIM, { ko:true }).replace('class="sprite"', 'class="sprite st-idle"');
+  bob._pose = 'idle';
+  bob.classList.add('ko');
+  bob.style.rotate = '-78deg';
+  S.bobT = Math.max(0.05, S.bobX - 0.07); S.bobTY = 0;
+
+  setPose(val, 'idle'); val._pose = 'idle';
+
+  setTimeout(() => {
+    overlay.classList.add('on');
+    S.running = false;
+    S.overlayAt = performance.now();   /* korte rustpauze voor de knop mag vluchten */
+  }, 1150);
+}
+
+/* ============================================================
+   OPNIEUW
+   ============================================================ */
+function puffAt(el){
+  const z = retrywrap.getBoundingClientRect(), b = el.getBoundingClientRect();
+  const cx = b.left - z.left + b.width/2, cy = b.top - z.top + b.height/2;
+  for (let i = 0; i < 7; i++){
+    const d = document.createElement('span');
+    d.className = 'puff';
+    d.style.left = cx + 'px'; d.style.top = cy + 'px';
+    const a = Math.random()*Math.PI*2, r = 22 + Math.random()*28;
+    d.animate([{ transform:'translate(-50%,-50%)', opacity:1 },
+               { transform:'translate(' + (Math.cos(a)*r) + 'px,' + (Math.sin(a)*r) + 'px)', opacity:0 }],
+              { duration:420, easing:'ease-out' }).onfinish = () => d.remove();
+    retrywrap.appendChild(d);
+  }
+}
+
+let lastFlee = 0, movedAt = 0;
+addEventListener('pointermove', () => { movedAt = performance.now(); }, { passive:true });
+function flee(){
+  if (S.dodgeTries >= RQUIPS.length) return;
+  const now = performance.now();
+  if (now - (S.overlayAt || 0) < 700) return;
+  if (movedAt < (S.overlayAt || 0)) return;
+  if (now - lastFlee < 300) return;
+  lastFlee = now;
+  puffAt(retry);
+
+  const z = retrywrap.getBoundingClientRect(), b = retry.getBoundingClientRect();
+  const maxX = Math.max(0, z.width - b.width - 8);
+  const maxY = Math.max(0, z.height - b.height - 4);
+  retry.style.left = (4 + Math.random()*maxX) + 'px';
+  retry.style.top  = (2 + Math.random()*maxY) + 'px';
+
+  rquip.textContent = RQUIPS[S.dodgeTries];
+  S.dodgeTries++;
+
+  if (S.dodgeTries >= RQUIPS.length){
+    retry.textContent = 'Game over';
+    retry.classList.add('caught');
+    rquip.textContent = '';
+  }
+}
+retry.addEventListener('pointerenter', e => { if (e.pointerType === 'mouse') flee(); });
+retry.addEventListener('pointerdown',  e => { if (S.dodgeTries < RQUIPS.length){ e.preventDefault(); flee(); } });
+retry.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && S.dodgeTries < RQUIPS.length){ e.preventDefault(); flee(); }
+});
+retry.addEventListener('click', () => { if (S.dodgeTries >= RQUIPS.length) start(); });
+
+/* ============================================================
+   START
+   ============================================================ */
+function start(){
+  reset();
+  $('#intro').classList.remove('on');
+  $('#play').classList.add('on');
+  requestAnimationFrame(() => {
+    place(bob, S.bobX, S.bobY); place(val, S.valX, S.valY);
+    S.running = true; S.phase = 'laser';
+    S.last = 0; S.nextShot = performance.now() + 1100;
+    cancelAnimationFrame(S.raf);
+    S.raf = requestAnimationFrame(loop);
+  });
+}
+$('#startBtn').addEventListener('click', start);
+addEventListener('resize', () => { place(bob, S.bobX, S.bobY); place(val, S.valX, S.valY); });
+</script>
